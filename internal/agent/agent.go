@@ -1905,7 +1905,24 @@ func (a *Agent) ExecuteMCPToolForConversation(ctx context.Context, conversationI
 		a.currentConversationID = prev
 		a.mu.Unlock()
 	}()
+	ctx = withAgentConversationID(ctx, conversationID)
 	return a.executeToolViaMCP(ctx, toolName, args)
+}
+
+// CancelMCPToolExecutionWithNote 取消一次进行中的 MCP 工具（先内部后外部），与监控页「终止工具」一致；note 非空时合并进返回给模型的文本。
+func (a *Agent) CancelMCPToolExecutionWithNote(executionID, note string) bool {
+	executionID = strings.TrimSpace(executionID)
+	note = strings.TrimSpace(note)
+	if executionID == "" {
+		return false
+	}
+	if a.mcpServer != nil && a.mcpServer.CancelToolExecutionWithNote(executionID, note) {
+		return true
+	}
+	if a.externalMCPMgr != nil && a.externalMCPMgr.CancelToolExecutionWithNote(executionID, note) {
+		return true
+	}
+	return false
 }
 
 // extractQuotedToolName 尝试从错误信息中提取被引用的工具名称
