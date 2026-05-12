@@ -63,6 +63,126 @@ type MultiAgentConfig struct {
 	EinoSkills MultiAgentEinoSkillsConfig `yaml:"eino_skills,omitempty" json:"eino_skills,omitempty"`
 	// EinoMiddleware wires optional ADK middleware (patchtoolcalls, toolsearch, plantask, reduction) and Deep extras.
 	EinoMiddleware MultiAgentEinoMiddlewareConfig `yaml:"eino_middleware,omitempty" json:"eino_middleware,omitempty"`
+	// EinoCallbacks attaches CloudWeGo eino callbacks.InitCallbacks on ADK Runner context (structured logs + optional SSE trace).
+	EinoCallbacks MultiAgentEinoCallbacksConfig `yaml:"eino_callbacks,omitempty" json:"eino_callbacks,omitempty"`
+}
+
+// MultiAgentEinoCallbacksConfig enables Eino unified callbacks on each ADK agent run (deep / plan_execute / supervisor / eino_single).
+// Modes: log_only (zap + optional OTel; no SSE to browser), sse (adds client SSE eino_trace_* when sse_trace_to_client), full (sse rules + stream callback copies closed).
+type MultiAgentEinoCallbacksConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"` // log_only | sse | full; empty with enabled=true defaults to log_only
+	// SseTraceToClient when true emits eino_trace_* SSE for UI (use only for admin/debug; nil/false recommended in production).
+	SseTraceToClient *bool `yaml:"sse_trace_to_client,omitempty" json:"sse_trace_to_client,omitempty"`
+	// Otel configures OpenTelemetry trace export (independent of mode; exporter none disables export even if enabled).
+	Otel MultiAgentEinoCallbacksOtelConfig `yaml:"otel,omitempty" json:"otel,omitempty"`
+	// MaxInputSummaryRunes / MaxOutputSummaryRunes cap text placed in SSE payloads and debug logs (not full payloads).
+	MaxInputSummaryRunes  int `yaml:"max_input_summary_runes,omitempty" json:"max_input_summary_runes,omitempty"`
+	MaxOutputSummaryRunes int `yaml:"max_output_summary_runes,omitempty" json:"max_output_summary_runes,omitempty"`
+	// ZapVerbose when true logs input/output summaries at zap.Debug on start/end; false uses Info with short fields only.
+	ZapVerbose bool `yaml:"zap_verbose,omitempty" json:"zap_verbose,omitempty"`
+}
+
+// MultiAgentEinoCallbacksOtelConfig OpenTelemetry for Eino callback spans (W3C trace in collector / stdout).
+type MultiAgentEinoCallbacksOtelConfig struct {
+	Enabled     bool    `yaml:"enabled" json:"enabled"`
+	ServiceName string  `yaml:"service_name,omitempty" json:"service_name,omitempty"`
+	Exporter    string  `yaml:"exporter,omitempty" json:"exporter,omitempty"`         // none | stdout | otlphttp
+	OTLPEndpoint string `yaml:"otlp_endpoint,omitempty" json:"otlp_endpoint,omitempty"` // host:port, e.g. localhost:4318 (path /v1/traces)
+	SampleRatio float64 `yaml:"sample_ratio,omitempty" json:"sample_ratio,omitempty"`   // 0–1, default 1.0
+}
+
+// EinoCallbacksModeEffective returns off | log_only | sse | full.
+func (c MultiAgentEinoCallbacksConfig) EinoCallbacksModeEffective() string {
+	if !c.Enabled {
+		return "off"
+	}
+	m := strings.TrimSpace(strings.ToLower(c.Mode))
+	switch m {
+	case "log_only":
+		return "log_only"
+	case "sse":
+		return "sse"
+	case "full":
+		return "full"
+	case "":
+		return "log_only"
+	default:
+		return "log_only"
+	}
+}
+
+// SseTraceToClientEffective is false unless explicitly set true (best practice: do not expose framework traces to end users by default).
+func (c MultiAgentEinoCallbacksConfig) SseTraceToClientEffective() bool {
+	if c.SseTraceToClient == nil {
+		return false
+	}
+	return *c.SseTraceToClient
+}
+
+// ShouldEmitEinoTraceSSE is true when client-visible trace events should be sent over progress/SSE.
+func (c MultiAgentEinoCallbacksConfig) ShouldEmitEinoTraceSSE(mode string) bool {
+	if !c.SseTraceToClientEffective() {
+		return false
+	}
+	return mode == "sse" || mode == "full"
+}
+
+// OtelExporterEffective returns none | stdout | otlphttp.
+func (c MultiAgentEinoCallbacksOtelConfig) OtelExporterEffective() string {
+	e := strings.TrimSpace(strings.ToLower(c.Exporter))
+	switch e {
+	case "none", "stdout", "otlphttp":
+		return e
+	case "":
+		if c.Enabled {
+			return "stdout"
+		}
+		return "none"
+	default:
+		return "none"
+	}
+}
+
+// OtelTracingActive is true when spans should be started (enabled + non-none exporter).
+func (c MultiAgentEinoCallbacksConfig) OtelTracingActive() bool {
+	if !c.Otel.Enabled {
+		return false
+	}
+	return c.Otel.OtelExporterEffective() != "none"
+}
+
+func (c MultiAgentEinoCallbacksOtelConfig) ServiceNameEffective() string {
+	s := strings.TrimSpace(c.ServiceName)
+	if s != "" {
+		return s
+	}
+	return "cyberstrike-ai"
+}
+
+func (c MultiAgentEinoCallbacksOtelConfig) SampleRatioEffective() float64 {
+	r := c.SampleRatio
+	if r <= 0 {
+		return 1.0
+	}
+	if r > 1 {
+		return 1.0
+	}
+	return r
+}
+
+func (c MultiAgentEinoCallbacksConfig) EinoCallbacksMaxInputSummaryRunes() int {
+	if c.MaxInputSummaryRunes > 0 {
+		return c.MaxInputSummaryRunes
+	}
+	return 400
+}
+
+func (c MultiAgentEinoCallbacksConfig) EinoCallbacksMaxOutputSummaryRunes() int {
+	if c.MaxOutputSummaryRunes > 0 {
+		return c.MaxOutputSummaryRunes
+	}
+	return 400
 }
 
 // MultiAgentEinoMiddlewareConfig optional Eino ADK middleware and Deep / supervisor tuning.
