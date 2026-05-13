@@ -273,6 +273,116 @@ function escapeHtmlLocal(text) {
     return div.innerHTML;
 }
 
+/** fenced 块占位（BMP 私用区，正文几乎不会出现） */
+const _MD_FENCE_PRE = '\n\uE000CSAI_FENCE_';
+const _MD_FENCE_SUF = '_\uE000\n';
+
+function _maskFencedCodeBlocksForMdPreprocess(md) {
+    const blocks = [];
+    const masked = String(md).replace(/```[\s\S]*?```/g, (m) => {
+        const i = blocks.length;
+        blocks.push(m);
+        return _MD_FENCE_PRE + i + _MD_FENCE_SUF;
+    });
+    return { masked, blocks };
+}
+
+function _unmaskFencedCodeBlocksAfterMdPreprocess(s, blocks) {
+    let out = s;
+    for (let i = 0; i < blocks.length; i++) {
+        out = out.split(_MD_FENCE_PRE + i + _MD_FENCE_SUF).join(blocks[i]);
+    }
+    return out;
+}
+
+/**
+ * 模型/网关偶发把「思考」混进正文，用伪 XML 包裹（如 &lt;redacted_thinking&gt;…&lt;/redacted_thinking&gt;）。
+ * 与 Markdown 列表混排时，结束标签常被吞进 &lt;li&gt;，其后 **、` 等行内语法全部无法解析；成对块整段移除。
+ * @param {string} segment
+ * @returns {string}
+ */
+function _stripXmlReasoningWrappersForMarkdown(segment) {
+    let t = String(segment);
+    const tags = ['redacted_thinking', 'redacted_reasoning'];
+    for (let i = 0; i < tags.length; i++) {
+        const name = tags[i];
+        const re = new RegExp('<\\s*' + name + '\\b[^>]*>[\\s\\S]*?<\\s*/\\s*' + name + '\\s*>', 'gi');
+        t = t.replace(re, '\n\n');
+    }
+    return t.replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * 解除 LLM 常用的块级 HTML 外壳（`<div>`、`<p>`、`<section>`、`<article>`、`<main>`）。
+ * 整段包在块级标签里时，CommonMark 不会在块内再解析 Markdown，导致 **、` 原样显示。
+ */
+function _unwrapHtmlBlockWrappersForMarkdown(segment) {
+    let s = segment;
+    let prev;
+    for (let i = 0; i < 30 && s !== prev; i++) {
+        prev = s;
+        s = s.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, (_, inner) => String(inner).trim() + '\n\n');
+        s = s.replace(/<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/gi, (_, inner) => String(inner).trim() + '\n\n');
+        s = s.replace(/<section(?:\s[^>]*)?>([\s\S]*?)<\/section>/gi, (_, inner) => String(inner).trim() + '\n\n');
+        s = s.replace(/<article(?:\s[^>]*)?>([\s\S]*?)<\/article>/gi, (_, inner) => String(inner).trim() + '\n\n');
+        s = s.replace(/<main(?:\s[^>]*)?>([\s\S]*?)<\/main>/gi, (_, inner) => String(inner).trim() + '\n\n');
+        s = s.replace(/\n{3,}/g, '\n\n');
+    }
+    return s;
+}
+
+/**
+ * 将 HTML 列表 / 粘连的 `<li>` 还原为 Markdown 列表行，并去掉外层 `<ul>`，便于 marked 解析行内 **、` `
+ * @param {string} segment
+ * @returns {string}
+ */
+function _flattenOrphanHtmlLiInMarkdown(segment) {
+    let s = segment;
+    s = s.replace(/<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi, (_, inner) => {
+        const body = String(inner).trim().replace(/\s*\n\s*/g, ' ');
+        return '- ' + body + '\n';
+    });
+    s = s.replace(/<\/?ul(?:\s[^>]*)?>/gi, '\n');
+    s = s.replace(/<\/?ol(?:\s[^>]*)?>/gi, '\n');
+    s = s.replace(/([0-9A-Za-z_\u4e00-\u9fff])\s*<li(?:\s[^>]*)?>\s*/g, (_, ch) => ch + '\n- ');
+    return s.replace(/\n{3,}/g, '\n\n');
+}
+
+/** 行首 Unicode 项目符号 → Markdown 列表 `- `（模型常用 • 而非 `-`） */
+function _normalizeUnicodeBulletMarkersToMdDash(segment) {
+    return segment
+        .replace(/^\s*\u2022\s+/gm, '- ')
+        .replace(/^\s*\u00b7\s+/gm, '- ');
+}
+
+/**
+ * 解析前归一化助手 Markdown：去掉零宽字符，NFKC 将全角 * ` _ 等转为 ASCII，
+ * 避免 marked 无法识别强调/行内代码而原样显示 **、反引号；
+ * 并移除 &lt;redacted_thinking&gt; 等伪 XML 思考块、修正块级 HTML（`<div>`/`<p>`/…、`<ul>`/`<li>`）与 Unicode 项目符号 `•`，避免块级 HTML 吞掉 inline 解析。
+ * @param {string|null|undefined} text
+ * @returns {string}
+ */
+function normalizeAssistantMarkdownSource(text) {
+    if (text == null) return '';
+    let s = String(text);
+    s = s.replace(/[\u200B-\u200D\u200E\u200F\uFEFF\u2060]/g, '');
+    try {
+        s = s.normalize('NFKC');
+    } catch (e) {
+        /* ignore */
+    }
+    s = _stripXmlReasoningWrappersForMarkdown(s);
+    const fb = _maskFencedCodeBlocksForMdPreprocess(s);
+    s = _unwrapHtmlBlockWrappersForMarkdown(fb.masked);
+    s = _flattenOrphanHtmlLiInMarkdown(s);
+    s = _normalizeUnicodeBulletMarkersToMdDash(s);
+    s = _unmaskFencedCodeBlocksAfterMdPreprocess(s, fb.blocks);
+    return s;
+}
+if (typeof window !== 'undefined') {
+    window.normalizeAssistantMarkdownSource = normalizeAssistantMarkdownSource;
+}
+
 /**
  * 与 internal/openai.normalizeStreamingDelta 一致：兼容网关/模型返回「累计全文」或整包重发，
  * 避免前端 buffer += chunk 与后端已归一化的增量叠加导致逐段重复（如「响应中显示了响应中显示了」）。
@@ -316,10 +426,11 @@ function setTimelineItemContentStreamRich(contentEl, html) {
 
 function formatAssistantMarkdownContent(text) {
     const raw = text == null ? '' : String(text);
+    const src = normalizeAssistantMarkdownSource(raw);
     if (typeof marked !== 'undefined') {
         try {
             marked.setOptions({ breaks: true, gfm: true });
-            const parsed = marked.parse(raw);
+            const parsed = marked.parse(src, { async: false });
             if (typeof DOMPurify !== 'undefined') {
                 return DOMPurify.sanitize(parsed, assistantMarkdownSanitizeConfig);
             }

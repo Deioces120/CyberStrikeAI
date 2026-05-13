@@ -1844,7 +1844,10 @@ function refreshSystemReadyMessageBubbles() {
     if (typeof marked !== 'undefined') {
         try {
             marked.setOptions({ breaks: true, gfm: true });
-            const parsed = marked.parse(text);
+            const src = typeof window.normalizeAssistantMarkdownSource === 'function'
+                ? window.normalizeAssistantMarkdownSource(text)
+                : text;
+            const parsed = marked.parse(src, { async: false });
             formattedContent = typeof DOMPurify !== 'undefined'
                 ? DOMPurify.sanitize(parsed, defaultSanitizeConfig)
                 : parsed;
@@ -1935,7 +1938,10 @@ function addMessage(role, content, mcpExecutionIds = null, progressId = null, cr
                 breaks: true,
                 gfm: true,
             });
-            return marked.parse(raw);
+            const src = typeof window.normalizeAssistantMarkdownSource === 'function'
+                ? window.normalizeAssistantMarkdownSource(raw)
+                : raw;
+            return marked.parse(src, { async: false });
         } catch (e) {
             console.error('Markdown 解析失败:', e);
             return null;
