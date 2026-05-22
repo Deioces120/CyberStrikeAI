@@ -214,7 +214,7 @@ type ChatAttachment struct {
 type ChatReasoningRequest struct {
 	// Mode: default（跟随系统）| off | on | auto
 	Mode string `json:"mode,omitempty"`
-	// Effort: low | medium | high | max；空表示不指定（由系统默认与各 profile 决定）。
+	// Effort: low | medium | high | max | xhigh（原样下发；不同网关最高档命名不同）。空表示不指定。
 	Effort string `json:"effort,omitempty"`
 }
 
@@ -830,11 +830,26 @@ func (h *AgentHandler) ProcessMessageForRobot(ctx context.Context, platform, con
 	}
 	switch robotMode {
 	case "eino_single":
-		resultMA, errMA := multiagent.RunEinoSingleChatModelAgent(
-			taskCtx, h.config, &h.config.MultiAgent, h.agent, h.logger,
-			conversationID, finalMessage, agentHistoryMessages, roleTools, progressCallback, nil,
-		)
-		if errMA != nil {
+		curHist := agentHistoryMessages
+		curMsg := finalMessage
+		segmentUserMessage := finalMessage
+		var resultMA *multiagent.RunResult
+		var errMA error
+		var transientRunAttempts int
+		for {
+			resultMA, errMA = multiagent.RunEinoSingleChatModelAgent(
+				taskCtx, h.config, &h.config.MultiAgent, h.agent, h.logger,
+				conversationID, curMsg, curHist, roleTools, progressCallback, nil,
+			)
+			if errMA == nil {
+				break
+			}
+			if handled, _ := h.handleEinoTransientRetryContinue(
+				taskCtx, conversationID, resultMA, errMA, &transientRunAttempts,
+				&curHist, &curMsg, segmentUserMessage, progressCallback, nil,
+			); handled {
+				continue
+			}
 			taskStatus = "failed"
 			return h.finalizeRobotAgentError(taskCtx, assistantMessageID, conversationID, resultMA, errMA)
 		}
@@ -845,12 +860,27 @@ func (h *AgentHandler) ProcessMessageForRobot(ctx context.Context, platform, con
 				zap.String("robot_mode", robotMode))
 			break
 		}
-		resultMA, errMA := multiagent.RunDeepAgent(
-			taskCtx, h.config, &h.config.MultiAgent, h.agent, h.logger,
-			conversationID, finalMessage, agentHistoryMessages, roleTools, progressCallback,
-			h.agentsMarkdownDir, robotMode, nil,
-		)
-		if errMA != nil {
+		curHist := agentHistoryMessages
+		curMsg := finalMessage
+		segmentUserMessage := finalMessage
+		var resultMA *multiagent.RunResult
+		var errMA error
+		var transientRunAttempts int
+		for {
+			resultMA, errMA = multiagent.RunDeepAgent(
+				taskCtx, h.config, &h.config.MultiAgent, h.agent, h.logger,
+				conversationID, curMsg, curHist, roleTools, progressCallback,
+				h.agentsMarkdownDir, robotMode, nil,
+			)
+			if errMA == nil {
+				break
+			}
+			if handled, _ := h.handleEinoTransientRetryContinue(
+				taskCtx, conversationID, resultMA, errMA, &transientRunAttempts,
+				&curHist, &curMsg, segmentUserMessage, progressCallback, nil,
+			); handled {
+				continue
+			}
 			taskStatus = "failed"
 			return h.finalizeRobotAgentError(taskCtx, assistantMessageID, conversationID, resultMA, errMA)
 		}
