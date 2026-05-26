@@ -36,6 +36,32 @@ type Config struct {
 	SkillsDir   string                `yaml:"skills_dir,omitempty" json:"skills_dir,omitempty"` // Skills配置文件目录
 	AgentsDir   string                `yaml:"agents_dir,omitempty" json:"agents_dir,omitempty"` // 多代理子 Agent Markdown 定义目录（*.md，YAML front matter）
 	MultiAgent  MultiAgentConfig      `yaml:"multi_agent,omitempty" json:"multi_agent,omitempty"`
+	Project     ProjectConfig         `yaml:"project,omitempty" json:"project,omitempty"`
+}
+
+// ProjectConfig 项目黑板（跨对话共享事实）配置。
+type ProjectConfig struct {
+	Enabled                 bool   `yaml:"enabled" json:"enabled"`
+	DefaultProjectID        string `yaml:"default_project_id,omitempty" json:"default_project_id,omitempty"` // 机器人/批量等无显式项目时绑定的默认项目
+	FactIndexMaxRunes       int    `yaml:"fact_index_max_runes,omitempty" json:"fact_index_max_runes,omitempty"`
+	FactSummaryMaxRunes     int    `yaml:"fact_summary_max_runes,omitempty" json:"fact_summary_max_runes,omitempty"`
+	DefaultInjectDeprecated bool   `yaml:"default_inject_deprecated,omitempty" json:"default_inject_deprecated,omitempty"`
+}
+
+// FactIndexMaxRunesEffective 自动注入黑板索引的最大 rune 数。
+func (c ProjectConfig) FactIndexMaxRunesEffective() int {
+	if c.FactIndexMaxRunes <= 0 {
+		return 3500
+	}
+	return c.FactIndexMaxRunes
+}
+
+// FactSummaryMaxRunesEffective upsert 时 summary 最大 rune 数。
+func (c ProjectConfig) FactSummaryMaxRunesEffective() int {
+	if c.FactSummaryMaxRunes <= 0 {
+		return 120
+	}
+	return c.FactSummaryMaxRunes
 }
 
 // MultiAgentConfig 基于 CloudWeGo Eino adk/prebuilt 的多代理编排（deep | plan_execute | supervisor，与单 Agent /agent-loop 并存）。

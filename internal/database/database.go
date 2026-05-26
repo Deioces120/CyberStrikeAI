@@ -213,6 +213,40 @@ func (db *DB) initTables() error {
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);`
 
+	// 创建项目表
+	createProjectsTable := `
+	CREATE TABLE IF NOT EXISTS projects (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT,
+		scope_json TEXT,
+		status TEXT NOT NULL DEFAULT 'active',
+		pinned INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL
+	);`
+
+	// 创建项目事实表（黑板）
+	createProjectFactsTable := `
+	CREATE TABLE IF NOT EXISTS project_facts (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		fact_key TEXT NOT NULL,
+		category TEXT NOT NULL DEFAULT 'note',
+		summary TEXT NOT NULL DEFAULT '',
+		body TEXT,
+		confidence TEXT NOT NULL DEFAULT 'tentative',
+		source_conversation_id TEXT,
+		source_message_id TEXT,
+		pinned INTEGER NOT NULL DEFAULT 0,
+		supersedes_fact_id TEXT,
+		related_vulnerability_id TEXT,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+		UNIQUE(project_id, fact_key)
+	);`
+
 	// 创建漏洞表
 	createVulnerabilitiesTable := `
 	CREATE TABLE IF NOT EXISTS vulnerabilities (
@@ -445,6 +479,12 @@ func (db *DB) initTables() error {
 	CREATE INDEX IF NOT EXISTS idx_vulnerabilities_severity ON vulnerabilities(severity);
 	CREATE INDEX IF NOT EXISTS idx_vulnerabilities_status ON vulnerabilities(status);
 	CREATE INDEX IF NOT EXISTS idx_vulnerabilities_created_at ON vulnerabilities(created_at);
+	CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+	CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at);
+	CREATE INDEX IF NOT EXISTS idx_project_facts_project_id ON project_facts(project_id);
+	CREATE INDEX IF NOT EXISTS idx_project_facts_confidence ON project_facts(confidence);
+	CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
+	CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_id ON vulnerabilities(project_id);
 	CREATE INDEX IF NOT EXISTS idx_batch_tasks_queue_id ON batch_tasks(queue_id);
 	CREATE INDEX IF NOT EXISTS idx_batch_task_queues_created_at ON batch_task_queues(created_at);
 	CREATE INDEX IF NOT EXISTS idx_batch_task_queues_title ON batch_task_queues(title);
@@ -516,6 +556,14 @@ func (db *DB) initTables() error {
 		return fmt.Errorf("创建robot_user_sessions表失败: %w", err)
 	}
 
+	if _, err := db.Exec(createProjectsTable); err != nil {
+		return fmt.Errorf("创建projects表失败: %w", err)
+	}
+
+	if _, err := db.Exec(createProjectFactsTable); err != nil {
+		return fmt.Errorf("创建project_facts表失败: %w", err)
+	}
+
 	if _, err := db.Exec(createVulnerabilitiesTable); err != nil {
 		return fmt.Errorf("创建vulnerabilities表失败: %w", err)
 	}
@@ -581,6 +629,10 @@ func (db *DB) initTables() error {
 	if err := db.migrateVulnerabilitiesTable(); err != nil {
 		db.logger.Warn("迁移vulnerabilities表失败", zap.Error(err))
 		// 不返回错误，允许继续运行
+	}
+
+	if err := db.migrateProjectsTable(); err != nil {
+		db.logger.Warn("迁移projects相关表失败", zap.Error(err))
 	}
 
 	if err := db.migrateWebshellConnectionsTable(); err != nil {
@@ -930,6 +982,51 @@ func (db *DB) migrateBatchTaskQueuesTable() error {
 		}
 	}
 
+	var projectIDCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('batch_task_queues') WHERE name='project_id'").Scan(&projectIDCount)
+	if err != nil {
+		if _, addErr := db.Exec("ALTER TABLE batch_task_queues ADD COLUMN project_id TEXT"); addErr != nil {
+			errMsg := strings.ToLower(addErr.Error())
+			if !strings.Contains(errMsg, "duplicate column") && !strings.Contains(errMsg, "already exists") {
+				db.logger.Warn("添加batch_task_queues.project_id字段失败", zap.Error(addErr))
+			}
+		}
+	} else if projectIDCount == 0 {
+		if _, err := db.Exec("ALTER TABLE batch_task_queues ADD COLUMN project_id TEXT"); err != nil {
+			db.logger.Warn("添加batch_task_queues.project_id字段失败", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+// migrateProjectsTable 迁移 projects / conversations / vulnerabilities 的项目关联字段。
+func (db *DB) migrateProjectsTable() error {
+	for _, col := range []struct {
+		table string
+		name  string
+		stmt  string
+	}{
+		{"conversations", "project_id", "ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL"},
+		{"vulnerabilities", "project_id", "ALTER TABLE vulnerabilities ADD COLUMN project_id TEXT"},
+	} {
+		var count int
+		err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?", col.table, col.name).Scan(&count)
+		if err != nil {
+			if _, addErr := db.Exec(col.stmt); addErr != nil {
+				errMsg := strings.ToLower(addErr.Error())
+				if !strings.Contains(errMsg, "duplicate column") && !strings.Contains(errMsg, "already exists") {
+					db.logger.Warn("添加字段失败", zap.String("table", col.table), zap.String("field", col.name), zap.Error(addErr))
+				}
+			}
+			continue
+		}
+		if count == 0 {
+			if _, addErr := db.Exec(col.stmt); addErr != nil {
+				db.logger.Warn("添加字段失败", zap.String("table", col.table), zap.String("field", col.name), zap.Error(addErr))
+			}
+		}
+	}
 	return nil
 }
 
@@ -941,6 +1038,7 @@ func (db *DB) migrateVulnerabilitiesTable() error {
 	}{
 		{name: "conversation_tag", stmt: "ALTER TABLE vulnerabilities ADD COLUMN conversation_tag TEXT"},
 		{name: "task_tag", stmt: "ALTER TABLE vulnerabilities ADD COLUMN task_tag TEXT"},
+		{name: "project_id", stmt: "ALTER TABLE vulnerabilities ADD COLUMN project_id TEXT"},
 	}
 
 	for _, col := range columns {

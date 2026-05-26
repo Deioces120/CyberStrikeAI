@@ -17,6 +17,7 @@ import (
 	"cyberstrike-ai/internal/config"
 	"cyberstrike-ai/internal/mcp"
 	"cyberstrike-ai/internal/mcp/builtin"
+	"cyberstrike-ai/internal/project"
 	"cyberstrike-ai/internal/openai"
 	"cyberstrike-ai/internal/security"
 	"cyberstrike-ai/internal/storage"
@@ -365,12 +366,12 @@ type ProgressCallback func(eventType, message string, data interface{})
 
 // AgentLoop 执行Agent循环
 func (a *Agent) AgentLoop(ctx context.Context, userInput string, historyMessages []ChatMessage) (*AgentLoopResult, error) {
-	return a.AgentLoopWithProgress(ctx, userInput, historyMessages, "", nil, nil)
+	return a.AgentLoopWithProgress(ctx, userInput, historyMessages, "", nil, nil, "")
 }
 
 // AgentLoopWithConversationID 执行Agent循环（带对话ID）
 func (a *Agent) AgentLoopWithConversationID(ctx context.Context, userInput string, historyMessages []ChatMessage, conversationID string) (*AgentLoopResult, error) {
-	return a.AgentLoopWithProgress(ctx, userInput, historyMessages, conversationID, nil, nil)
+	return a.AgentLoopWithProgress(ctx, userInput, historyMessages, conversationID, nil, nil, "")
 }
 
 // EinoSingleAgentSystemInstruction 供 Eino adk.ChatModelAgent.Instruction 使用，与 AgentLoopWithProgress 首条 system 对齐（含 system_prompt_path）。
@@ -396,7 +397,7 @@ func (a *Agent) EinoSingleAgentSystemInstruction() string {
 }
 
 // AgentLoopWithProgress 执行Agent循环（带进度回调和对话ID）
-func (a *Agent) AgentLoopWithProgress(ctx context.Context, userInput string, historyMessages []ChatMessage, conversationID string, callback ProgressCallback, roleTools []string) (*AgentLoopResult, error) {
+func (a *Agent) AgentLoopWithProgress(ctx context.Context, userInput string, historyMessages []ChatMessage, conversationID string, callback ProgressCallback, roleTools []string, systemPromptExtra string) (*AgentLoopResult, error) {
 	ctx = withAgentConversationID(ctx, conversationID)
 	// 设置当前对话ID（兼容未走 context 的旧路径；并发会话应以 context 为准）
 	a.mu.Lock()
@@ -426,6 +427,7 @@ func (a *Agent) AgentLoopWithProgress(ctx context.Context, userInput string, his
 			}
 		}
 	}
+	systemPrompt = project.AppendSystemPromptBlock(systemPrompt, systemPromptExtra)
 
 	messages := []ChatMessage{
 		{

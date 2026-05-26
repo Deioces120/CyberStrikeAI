@@ -17,6 +17,7 @@ import (
 type Conversation struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
+	ProjectID string    `json:"projectId,omitempty"`
 	Pinned    bool      `json:"pinned"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -46,13 +47,32 @@ func (db *DB) CreateConversationWithWebshell(webshellConnectionID, title string,
 	id := uuid.New().String()
 	now := time.Now()
 
+	projectID := strings.TrimSpace(meta.ProjectID)
+	if projectID != "" {
+		if _, err := db.GetProject(projectID); err != nil {
+			return nil, err
+		}
+	}
+
 	var err error
-	if webshellConnectionID != "" {
+	wsID := strings.TrimSpace(webshellConnectionID)
+	switch {
+	case wsID != "" && projectID != "":
+		_, err = db.Exec(
+			"INSERT INTO conversations (id, title, created_at, updated_at, webshell_connection_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+			id, title, now, now, wsID, projectID,
+		)
+	case wsID != "":
 		_, err = db.Exec(
 			"INSERT INTO conversations (id, title, created_at, updated_at, webshell_connection_id) VALUES (?, ?, ?, ?, ?)",
-			id, title, now, now, webshellConnectionID,
+			id, title, now, now, wsID,
 		)
-	} else {
+	case projectID != "":
+		_, err = db.Exec(
+			"INSERT INTO conversations (id, title, created_at, updated_at, project_id) VALUES (?, ?, ?, ?, ?)",
+			id, title, now, now, projectID,
+		)
+	default:
 		_, err = db.Exec(
 			"INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
 			id, title, now, now,
@@ -65,11 +85,12 @@ func (db *DB) CreateConversationWithWebshell(webshellConnectionID, title string,
 	conv := &Conversation{
 		ID:        id,
 		Title:     title,
+		ProjectID: projectID,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if webshellConnectionID != "" {
-		meta.WebShellConnectionID = webshellConnectionID
+	if wsID != "" {
+		meta.WebShellConnectionID = wsID
 	}
 	notifyConversationCreated(conv, meta)
 	return conv, nil
@@ -210,15 +231,19 @@ func (db *DB) GetConversation(id string) (*Conversation, error) {
 	var createdAt, updatedAt string
 	var pinned int
 
+	var projectID sql.NullString
 	err := db.QueryRow(
-		"SELECT id, title, pinned, created_at, updated_at FROM conversations WHERE id = ?",
+		"SELECT id, title, pinned, created_at, updated_at, project_id FROM conversations WHERE id = ?",
 		id,
-	).Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt)
+	).Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt, &projectID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("对话不存在")
 		}
 		return nil, fmt.Errorf("查询对话失败: %w", err)
+	}
+	if projectID.Valid {
+		conv.ProjectID = strings.TrimSpace(projectID.String)
 	}
 
 	// 尝试多种时间格式解析
@@ -292,15 +317,19 @@ func (db *DB) GetConversationLite(id string) (*Conversation, error) {
 	var createdAt, updatedAt string
 	var pinned int
 
+	var projectID sql.NullString
 	err := db.QueryRow(
-		"SELECT id, title, pinned, created_at, updated_at FROM conversations WHERE id = ?",
+		"SELECT id, title, pinned, created_at, updated_at, project_id FROM conversations WHERE id = ?",
 		id,
-	).Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt)
+	).Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt, &projectID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("对话不存在")
 		}
 		return nil, fmt.Errorf("查询对话失败: %w", err)
+	}
+	if projectID.Valid {
+		conv.ProjectID = strings.TrimSpace(projectID.String)
 	}
 
 	// 尝试多种时间格式解析
@@ -341,7 +370,7 @@ func (db *DB) ListConversations(limit, offset int, search string) ([]*Conversati
 		// 使用 EXISTS 子查询代替 LEFT JOIN + DISTINCT，避免大表笛卡尔积
 		searchPattern := "%" + search + "%"
 		rows, err = db.Query(
-			`SELECT c.id, c.title, COALESCE(c.pinned, 0), c.created_at, c.updated_at
+			`SELECT c.id, c.title, COALESCE(c.pinned, 0), c.created_at, c.updated_at, c.project_id
 			 FROM conversations c
 			 WHERE c.title LIKE ?
 			    OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.content LIKE ?)
@@ -351,7 +380,7 @@ func (db *DB) ListConversations(limit, offset int, search string) ([]*Conversati
 		)
 	} else {
 		rows, err = db.Query(
-			"SELECT id, title, COALESCE(pinned, 0), created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+			"SELECT id, title, COALESCE(pinned, 0), created_at, updated_at, project_id FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?",
 			limit, offset,
 		)
 	}
@@ -366,9 +395,13 @@ func (db *DB) ListConversations(limit, offset int, search string) ([]*Conversati
 		var conv Conversation
 		var createdAt, updatedAt string
 		var pinned int
+		var projectID sql.NullString
 
-		if err := rows.Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&conv.ID, &conv.Title, &pinned, &createdAt, &updatedAt, &projectID); err != nil {
 			return nil, fmt.Errorf("扫描对话失败: %w", err)
+		}
+		if projectID.Valid {
+			conv.ProjectID = strings.TrimSpace(projectID.String)
 		}
 
 		// 尝试多种时间格式解析
