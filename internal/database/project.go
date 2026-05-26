@@ -282,6 +282,14 @@ func (db *DB) GetProjectFact(id string) (*ProjectFact, error) {
 	return scanProjectFactRow(row)
 }
 
+// mergeFactBodyOnUpdate 更新时若 incoming body 为空则保留已有内容，避免仅改 summary 时丢失攻击链。
+func mergeFactBodyOnUpdate(incoming, existing string) string {
+	if strings.TrimSpace(incoming) == "" {
+		return existing
+	}
+	return incoming
+}
+
 // UpsertProjectFact 创建或更新事实（按 project_id + fact_key）。
 func (db *DB) UpsertProjectFact(f *ProjectFact) (*ProjectFact, error) {
 	if err := ValidateFactKey(f.FactKey); err != nil {
@@ -300,6 +308,7 @@ func (db *DB) UpsertProjectFact(f *ProjectFact) (*ProjectFact, error) {
 		f.ID = existing.ID
 		f.CreatedAt = existing.CreatedAt
 		f.UpdatedAt = now
+		f.Body = mergeFactBodyOnUpdate(f.Body, existing.Body)
 		_, err = db.Exec(
 			`UPDATE project_facts SET category = ?, summary = ?, body = ?, confidence = ?,
 				source_conversation_id = ?, source_message_id = ?, pinned = ?,
@@ -351,6 +360,31 @@ func (db *DB) DeprecateProjectFact(projectID, factKey string) error {
 		return fmt.Errorf("事实不存在")
 	}
 	return nil
+}
+
+// RestoreProjectFact 将已废弃事实恢复为 tentative 或 confirmed（重新参与黑板索引）。
+func (db *DB) RestoreProjectFact(projectID, factKey, confidence string) error {
+	confidence = strings.TrimSpace(strings.ToLower(confidence))
+	if confidence == "" {
+		confidence = "tentative"
+	}
+	if confidence != "confirmed" && confidence != "tentative" {
+		return fmt.Errorf("confidence 须为 confirmed 或 tentative")
+	}
+
+	existing, err := db.GetProjectFactByKey(projectID, factKey)
+	if err != nil {
+		return fmt.Errorf("事实不存在")
+	}
+	if strings.ToLower(strings.TrimSpace(existing.Confidence)) != "deprecated" {
+		return fmt.Errorf("事实未处于废弃状态")
+	}
+
+	_, err = db.Exec(
+		`UPDATE project_facts SET confidence = ?, updated_at = ? WHERE project_id = ? AND fact_key = ?`,
+		confidence, time.Now(), projectID, factKey,
+	)
+	return err
 }
 
 // DeleteProjectFact 删除事实。

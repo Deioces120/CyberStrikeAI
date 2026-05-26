@@ -14,6 +14,7 @@ const (
 	ToolListProjectFacts     = "list_project_facts"
 	ToolSearchProjectFacts   = "search_project_facts"
 	ToolDeprecateProjectFact = "deprecate_project_fact"
+	ToolRestoreProjectFact   = "restore_project_fact"
 
 	// 知识库工具
 	ToolListKnowledgeRiskTypes = "list_knowledge_risk_types"
@@ -69,6 +70,7 @@ func IsBuiltinTool(toolName string) bool {
 		ToolListProjectFacts,
 		ToolSearchProjectFacts,
 		ToolDeprecateProjectFact,
+		ToolRestoreProjectFact,
 		ToolListKnowledgeRiskTypes,
 		ToolSearchKnowledgeBase,
 		ToolWebshellExec,
@@ -119,6 +121,7 @@ func GetAllBuiltinTools() []string {
 		ToolListProjectFacts,
 		ToolSearchProjectFacts,
 		ToolDeprecateProjectFact,
+		ToolRestoreProjectFact,
 		ToolListKnowledgeRiskTypes,
 		ToolSearchKnowledgeBase,
 		ToolWebshellExec,
