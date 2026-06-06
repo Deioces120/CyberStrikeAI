@@ -105,6 +105,7 @@ function updateNavState(pageId) {
     // 移除所有活动状态
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.remove('active');
+        item.classList.remove('expanded');
     });
     
     document.querySelectorAll('.nav-submenu-item').forEach(item => {
@@ -228,9 +229,17 @@ function toggleSubmenu(menuId) {
         return;
     }
 
-    // 展开侧栏且仅一个子项（角色、Agents 等）：单击直接进入，无需再点二级菜单
-    if (navigateSingleSubmenuPage(navItem)) {
-        return;
+    // 展开侧栏且仅一个子项（角色、Agents 等）：单击进入；已在该页且已展开时再次单击折叠
+    const singleSubItems = getNavSubmenuItems(navItem);
+    if (singleSubItems.length === 1) {
+        const singlePageId = singleSubItems[0].getAttribute('data-page');
+        if (navItem.classList.contains('expanded') && singlePageId === currentPage) {
+            navItem.classList.remove('expanded');
+            return;
+        }
+        if (navigateSingleSubmenuPage(navItem)) {
+            return;
+        }
     }
 
     // 展开状态下切换子菜单，并滚入视口以便看到子项
